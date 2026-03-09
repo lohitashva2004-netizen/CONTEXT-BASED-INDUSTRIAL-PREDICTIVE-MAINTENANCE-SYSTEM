@@ -10,7 +10,7 @@ import threading
 from collections import deque
 
 # =========================================================
-# SENSOR STORAGE
+# GLOBAL DATA
 # =========================================================
 
 latest_data = {
@@ -29,7 +29,7 @@ temperature.append(0)
 current.append(0)
 
 # =========================================================
-# ANALYTICS
+# ANALYTICS FUNCTIONS
 # =========================================================
 
 def calculate_health(v,t,c):
@@ -38,10 +38,12 @@ def calculate_health(v,t,c):
 
     if score < 0:
         score = 0
+
     if score > 100:
         score = 100
 
     return round(score,1)
+
 
 def detect_fault(v,t,c):
 
@@ -66,47 +68,60 @@ def predict_rul(v,t,c):
     return round(rul/100,1)
 
 
-def maintenance_advice(f):
+def maintenance_advice(fault):
 
-    if f=="Bearing Fault":
-        return "Inspect bearing lubrication"
+    if fault == "Bearing Fault":
+        return "Inspect bearings and lubrication"
 
-    if f=="Thermal Fault":
+    if fault == "Thermal Fault":
         return "Check cooling system"
 
-    if f=="Electrical Overload":
-        return "Inspect motor load"
+    if fault == "Electrical Overload":
+        return "Reduce motor load"
 
     return "No maintenance required"
 
+
 # =========================================================
-# MQTT
+# MQTT CALLBACK
 # =========================================================
 
 def on_message(client,userdata,msg):
 
     global latest_data
 
-    data = json.loads(msg.payload.decode())
+    try:
 
-    v=data["vibration"]
-    t=data["temperature"]
-    c=data["current"]
+        payload = json.loads(msg.payload.decode())
 
-    latest_data["vibration"]=v
-    latest_data["temperature"]=t
-    latest_data["current"]=c
+        v = payload.get("vibration",0)
+        t = payload.get("temperature",0)
+        c = payload.get("current",0)
 
-    vibration.append(v)
-    temperature.append(t)
-    current.append(c)
+        latest_data["vibration"] = v
+        latest_data["temperature"] = t
+        latest_data["current"] = c
 
+        vibration.append(v)
+        temperature.append(t)
+        current.append(c)
+
+        print("MQTT:",payload)
+
+    except Exception as e:
+
+        print("MQTT ERROR:",e)
+
+
+# =========================================================
+# START MQTT THREAD
+# =========================================================
 
 def start_mqtt():
 
-    client=mqtt.Client()
+    client = mqtt.Client()
 
-    client.on_message=on_message
+    client.on_message = on_message
 
     client.connect("broker.hivemq.com",1883,60)
 
@@ -115,151 +130,166 @@ def start_mqtt():
     client.loop_forever()
 
 
-thread=threading.Thread(target=start_mqtt)
-thread.daemon=True
+thread = threading.Thread(target=start_mqtt)
+thread.daemon = True
 thread.start()
+
 
 # =========================================================
 # DASH APP
 # =========================================================
 
-app=dash.Dash(__name__,external_stylesheets=[dbc.themes.CYBORG])
-server=app.server
+app = dash.Dash(__name__,external_stylesheets=[dbc.themes.CYBORG])
+server = app.server
+
 
 # =========================================================
 # LAYOUT
 # =========================================================
 
-app.layout=dbc.Container([
+app.layout = dbc.Container([
 
-html.H1("⚙ AI Predictive Maintenance Dashboard",
-style={"textAlign":"center","marginBottom":"30px"}),
-
-dbc.Row([
-
-dbc.Col(dcc.Graph(id="vib"),width=4),
-dbc.Col(dcc.Graph(id="temp"),width=4),
-dbc.Col(dcc.Graph(id="curr"),width=4)
-
-]),
+html.H1("⚙ Industrial Predictive Maintenance Dashboard",
+style={"textAlign":"center","marginBottom":"40px"}),
 
 dbc.Row([
 
-dbc.Col(dcc.Graph(id="health"),width=4),
-
-dbc.Col(html.Div(id="fault-card",
-style={"fontSize":"24px","padding":"20px"}),width=4),
-
-dbc.Col(html.Div(id="alarm",
-style={"fontSize":"24px","padding":"20px"}),width=4)
+dbc.Col(dbc.Card(dcc.Graph(id="vibration-gauge"),body=True),width=4),
+dbc.Col(dbc.Card(dcc.Graph(id="temperature-gauge"),body=True),width=4),
+dbc.Col(dbc.Card(dcc.Graph(id="current-gauge"),body=True),width=4)
 
 ]),
+
+html.Br(),
 
 dbc.Row([
 
-dbc.Col(dcc.Graph(id="trend"),width=12)
+dbc.Col(dbc.Card(dcc.Graph(id="health-gauge"),body=True),width=4),
+
+dbc.Col(dbc.Card(html.H3(id="fault-display",
+style={"textAlign":"center"}),body=True),width=4),
+
+dbc.Col(dbc.Card(html.H3(id="alarm-display",
+style={"textAlign":"center"}),body=True),width=4)
 
 ]),
+
+html.Br(),
 
 dbc.Row([
 
-dbc.Col(dcc.Graph(id="faultprob"),width=6),
-
-dbc.Col(html.Div(id="rul"),width=3),
-
-dbc.Col(html.Div(id="maint"),width=3)
+dbc.Col(dbc.Card(dcc.Graph(id="trend-graph"),body=True),width=12)
 
 ]),
+
+html.Br(),
 
 dbc.Row([
 
-dbc.Col(html.Div(id="table"))
+dbc.Col(dbc.Card(dcc.Graph(id="fault-chart"),body=True),width=6),
+
+dbc.Col(dbc.Card(html.H4(id="rul-display"),body=True),width=3),
+
+dbc.Col(dbc.Card(html.H4(id="maintenance-display"),body=True),width=3)
 
 ]),
 
-dcc.Interval(id="update",interval=2000)
+html.Br(),
+
+dbc.Row([
+
+dbc.Col(html.H4("Recent Sensor Data")),
+dbc.Col(html.Div(id="data-table"))
+
+]),
+
+dcc.Interval(id="interval-update",interval=2000,n_intervals=0)
 
 ],fluid=True)
 
+
 # =========================================================
-# CALLBACK
+# DASH CALLBACK
 # =========================================================
 
 @app.callback(
 
 [
-Output("vib","figure"),
-Output("temp","figure"),
-Output("curr","figure"),
-Output("health","figure"),
-Output("trend","figure"),
-Output("faultprob","figure"),
-Output("rul","children"),
-Output("maint","children"),
-Output("fault-card","children"),
-Output("alarm","children"),
-Output("table","children")
+Output("vibration-gauge","figure"),
+Output("temperature-gauge","figure"),
+Output("current-gauge","figure"),
+Output("health-gauge","figure"),
+Output("trend-graph","figure"),
+Output("fault-chart","figure"),
+Output("rul-display","children"),
+Output("maintenance-display","children"),
+Output("fault-display","children"),
+Output("alarm-display","children"),
+Output("data-table","children")
 ],
 
-[Input("update","n_intervals")]
+[Input("interval-update","n_intervals")]
 
 )
 
-def update(n):
+def update_dashboard(n):
 
-    v=latest_data["vibration"]
-    t=latest_data["temperature"]
-    c=latest_data["current"]
+    v = latest_data["vibration"]
+    t = latest_data["temperature"]
+    c = latest_data["current"]
 
-    health=calculate_health(v,t,c)
+    health = calculate_health(v,t,c)
 
-    fault=detect_fault(v,t,c)
+    fault = detect_fault(v,t,c)
 
-    rul=predict_rul(v,t,c)
+    rul = predict_rul(v,t,c)
 
-    maintenance=maintenance_advice(fault)
+    maintenance = maintenance_advice(fault)
 
-    alarm="🟢 SYSTEM NORMAL"
+    alarm = "🟢 SYSTEM NORMAL"
 
-    if fault!="Normal":
+    if fault != "Normal":
+        alarm = "🔴 ALARM ACTIVE"
 
-        alarm="🔴 ALARM ACTIVE"
 
+    # -------------------------
+    # GAUGES
+    # -------------------------
 
-    vib=go.Figure(go.Indicator(
+    vib = go.Figure(go.Indicator(
     mode="gauge+number",
     value=v,
     title={"text":"Vibration"},
-    gauge={"axis":{"range":[0,4095]},
-    "bar":{"color":"orange"}}
+    gauge={"axis":{"range":[0,4095]}}
     ))
 
-    temp=go.Figure(go.Indicator(
+    temp = go.Figure(go.Indicator(
     mode="gauge+number",
     value=t,
     title={"text":"Temperature"},
-    gauge={"axis":{"range":[0,4095]},
-    "bar":{"color":"red"}}
+    gauge={"axis":{"range":[0,4095]}}
     ))
 
-    curr=go.Figure(go.Indicator(
+    curr = go.Figure(go.Indicator(
     mode="gauge+number",
     value=c,
     title={"text":"Current"},
-    gauge={"axis":{"range":[0,4095]},
-    "bar":{"color":"cyan"}}
+    gauge={"axis":{"range":[0,4095]}}
     ))
 
-    healthg=go.Figure(go.Indicator(
+    health_g = go.Figure(go.Indicator(
     mode="gauge+number",
     value=health,
-    title={"text":"Health %"},
-    gauge={"axis":{"range":[0,100]},
-    "bar":{"color":"green"}}
+    title={"text":"Machine Health %"},
+    gauge={"axis":{"range":[0,100]}}
     ))
 
 
-    trend=go.Figure()
+    # -------------------------
+    # TREND GRAPH
+    # -------------------------
+
+    trend = go.Figure()
 
     trend.add_trace(go.Scatter(y=list(vibration),mode="lines",name="Vibration"))
     trend.add_trace(go.Scatter(y=list(temperature),mode="lines",name="Temperature"))
@@ -268,17 +298,25 @@ def update(n):
     trend.update_layout(title="Sensor Trend Analysis")
 
 
-    faultchart=go.Figure()
+    # -------------------------
+    # FAULT PROBABILITY
+    # -------------------------
 
-    faultchart.add_bar(
+    fault_chart = go.Figure()
+
+    fault_chart.add_bar(
     x=["Bearing","Thermal","Electrical"],
     y=[v/40,t/40,c/40]
     )
 
-    faultchart.update_layout(title="Fault Probability")
+    fault_chart.update_layout(title="Fault Probability")
 
 
-    df=pd.DataFrame({
+    # -------------------------
+    # TABLE
+    # -------------------------
+
+    df = pd.DataFrame({
 
     "Vibration":list(vibration)[-10:],
     "Temperature":list(temperature)[-10:],
@@ -286,26 +324,30 @@ def update(n):
 
     })
 
-    table=dbc.Table.from_dataframe(df,striped=True,bordered=True,hover=True)
+    table = dbc.Table.from_dataframe(df,striped=True,bordered=True,hover=True)
 
 
     return(
+
     vib,
     temp,
     curr,
-    healthg,
+    health_g,
     trend,
-    faultchart,
+    fault_chart,
     f"Remaining Useful Life: {rul} hours",
     f"Maintenance Advice: {maintenance}",
     f"Detected Fault: {fault}",
     alarm,
     table
+
     )
 
+
 # =========================================================
-# RUN
+# RUN SERVER
 # =========================================================
 
 if __name__=="__main__":
+
     app.run(host="0.0.0.0",port=10000)
